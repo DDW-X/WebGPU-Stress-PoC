@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Extreme GPU Stress (Debugged)</title>
+<style>
+    html, body { margin: 0; overflow: hidden; background: #000; height: 100%; }
+    canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+// تلاش برای گرفتن کانتکست با پرفورمنس بالا
+const gl = canvas.getContext('webgl2', { powerPreference: 'high-performance' });
+
+if (!gl) {
+    document.body.innerHTML = '<h2 style="color:white;text-align:center;">WebGL2 not supported</h2>';
+    throw new Error("WebGL2 not supported");
+}
+
+// هندل کردن تغییر سایز صفحه
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+}
+window.addEventListener('resize', resize);
+resize();
+
+const vs = `#version 300 es
+in vec2 p;
+void main() {
+    gl_Position = vec4(p, 0, 1);
+}`;
+
+// کدهای فرگمنت شیدر با فاصله‌های استاندارد شده
+const fs = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform vec2 r;
+uniform float t;
+
+float hash(vec3 p) {
+    return fract(sin(dot(p, vec3(17.1, 31.7, 47.2))) * 43758.5453);
+}
+
+float noise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float n = mix(
+        mix(mix(hash(i + vec3(0, 0, 0)), hash(i + vec3(1, 0, 0)), f.x),
+            mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+        mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x),
+            mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y),
+        f.z);
+    return n;
+}
+
+float fbm(vec3 p) {
+    float a = 0.5;
+    float s = 0.0;
+    for (int i = 0; i < 7; i++) {
+        s += a * noise(p);
+        p *= 2.02;
+        a *= 0.5;
+    }
+    return s;
+}
+
+float map(vec3 p) {
+    return fbm(p * 1.2 + vec3(0.0, t * 0.1, 0.0)) - 0.45;
+}
+
+void main() {
+    vec2 uv = (gl_FragCoord.xy - 0.5 * r) / r.y;
+    vec3 ro = vec3(0, 0, 3);
+    vec3 rd = normalize(vec3(uv, -1.5));
+    float d = 0.0;
+    float sum = 0.0;
+    
+    // حفظ لوپ سنگین طبق درخواست (600 مرحله)
+    for (int i = 0; i < 600; i++) {
+        vec3 p = ro + rd * d;
+        float h = map(p);
+        sum += exp(-abs(h) * 8.0) * 0.015;
+        d += 0.01;
+    }
+    o = vec4(vec3(sum), 1.0);
+}
+`;
+
+function sh(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    // اضافه کردن چک ارور برای دیباگ
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error("Shader Error:", gl.getShaderInfoLog(s));
+    }
+    return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
+gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+// چک کردن لینک موفقیت آمیز برنامه
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error("Program Link Error:", gl.getProgramInfoLog(prog));
+}
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+
+const loc = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+const ur = gl.getUniformLocation(prog, 'r');
+const ut = gl.getUniformLocation(prog, 't');
+
+let start = performance.now();
+
+function loop() {
+    gl.uniform2f(ur, canvas.width, canvas.height);
+    gl.uniform1f(ut, (performance.now() - start) / 1000);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
