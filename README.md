@@ -51,14 +51,14 @@ This tool leverages **WebGPU Compute Shaders**, **Raymarching Volumetrics**, and
 **WARNING:** Clicking these links will immediately initiate the stress test. Save your work before proceeding.
 
 ### 🔴 Target A: ULTIMA (WebGPU + CPU)
-> **Link:** [https://ddw-x-lagging-test.vercel.app](https://ddw-x-lagging-test.vercel.app)
+> **Link:** [https://ddw-x-lagging-test.vercel.app](https://ddw-x-lagging-test2.vercel.app)
 >
 > **Description:** The bleeding edge of browser exhaustion. Combines multi-threaded CPU floating-point calculations with a heavy WebGPU Raymarching shader.
 > * **Attack Vector:** CPU Core Saturation + GPU VRAM Flood.
 > * **Best For:** High-end PC testing, Chrome, Edge.
 
 ### 🟠 Target B: EXTREME (WebGL2 Legacy)
-> **Link:** [https://ddw-x-lagging-test2.vercel.app](https://ddw-x-lagging-test2.vercel.app)
+> **Link:** [https://ddw-x-lagging-test2.vercel.app](https://ddw-x-lagging-test.vercel.app)
 >
 > **Description:** A highly optimized WebGL2 fragment shader loop designed for maximum compatibility.
 > * **Attack Vector:** Pure GPU Logic Unit (ALU) saturation via nested FBM loops.
