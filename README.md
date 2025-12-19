@@ -78,6 +78,39 @@ Our research identifies three distinct vectors used in this suite that bypass st
 
 ---
 
+## 💀 Live Deployment & Payload Analysis
+
+> [!CAUTION]
+> **ACCESS WARNING: READ BEFORE CLICKING**
+>
+> The links below host live weaponized payloads. **DDW-X assumes NO RESPONSIBILITY** for frozen devices, lost data, system crashes, or hardware thermal throttling resulting from accessing these URLs.
+>
+> You are entering a live fire zone. **PROCEED AT YOUR OWN RISK.**
+
+### 🎯 Target A: The "Mobile Killer" (WebGL2)
+**URL:** [https://ddw-x-lagging-test.vercel.app/](https://ddw-x-lagging-test.vercel.app/)
+
+* **Architecture:** **WebGL2 Legacy Core (GLSL 3.00 es)**
+* **Primary Target:** Mobile Devices (Android/iOS) & Tablets.
+* **Code Audit & Vector Analysis:**
+    * **Initialization:** Forces `powerPreference: 'high-performance'` to bypass battery saver modes.
+    * **The "Loop Trap":** Inside the fragment shader (`fs`), a hard-coded `for (int i = 0; i < 600; i++)` loop executes for *every single pixel*.
+    * **Math Saturation:** Abuses `exp(-abs(h))` combined with high-frequency `fbm` (Fractional Brownian Motion) noise calculation.
+    * **Result:** Mobile GPUs (Adreno/Mali/Apple Metal) cannot handle the thermal load, causing the OS UI layer to freeze immediately.
+
+### 🎯 Target B: The "Desktop Meltdown" (WebGPU)
+**URL:** [https://ddw-x-lagging-test2.vercel.app](https://ddw-x-lagging-test2.vercel.app)
+
+* **Architecture:** **WebGPU (Next-Gen) + Multi-Threaded Workers**
+* **Primary Target:** High-End PCs, Gaming Laptops, Chromium Browsers.
+* **Code Audit & Vector Analysis:**
+    * **Hybrid Exhaustion:** Unlike standard tests, this payload reads `navigator.hardwareConcurrency` to spawn CPU workers that execute infinite `Math.tan(x)` loops, locking the main thread.
+    * **VRAM Flood:** Allocates a `chaosBuffer` (Storage Buffer) and rewrites it via `device.queue.writeBuffer` every frame to saturate PCIe bandwidth.
+    * **Infinite Complexity:** Renders a Volumetric Gyroid surface where steps dynamically increase (`steps = Math.min(6000...)`), forcing the GPU driver into a TDR (Timeout Detection Recovery) loop.
+    * **Result:** Complete Operating System lockup. Mouse cursor freezes. Force restart required.
+
+---
+
 ## 📊 DDW-X Lab Report: Confirmed Vulnerabilities
 
 This new method has been rigorously tested by **DDW-X** against major platforms:
