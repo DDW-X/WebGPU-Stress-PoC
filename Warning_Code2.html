@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ULTIMA WebGPU Stress (CPU+GPU)</title>
+<style>
+html,body{margin:0;background:#000;overflow:hidden;height:100%}
+canvas{display:block;width:100%;height:100%;image-rendering: pixelated;}
+#ui{position:fixed;left:10px;top:10px;color:#f00;font:14px monospace;background:rgba(0,0,0,0.85);padding:10px;border:1px solid #f00;pointer-events:none;z-index:999;max-width:300px;}
+.warn{color:#ff0;font-weight:bold;}
+</style>
+</head>
+<body>
+<div id="ui">
+    <div>ULTIMA STRESS TEST</div>
+    <div id="stats">Initializing Core Meltdown...</div>
+    <div class="warn">WARNING: High Power Usage</div>
+</div>
+<canvas id="c"></canvas>
+<script type="module">
+// --------------------------------------------------------------------
+// PART 1: CPU MELTDOWN (Web Workers)
+// --------------------------------------------------------------------
+// ایجاد ورکرهایی که تمام هسته‌های سی‌پی‌یو را درگیر می‌کنند
+const threadCount = navigator.hardwareConcurrency || 4;
+const workers = [];
+const workerBlob = new Blob([`
+    self.onmessage = function() {
+        // حلقه بی‌نهایت سنگین برای سوزاندن سیکل‌های CPU
+        let x = 0.001;
+        while(true) {
+            // محاسبات ممیز شناور سنگین و بی‌هدف
+            for(let i=0; i<10000; i++) {
+                x = Math.sin(x) * Math.cos(x) + Math.tan(x);
+                x = Math.sqrt(Math.abs(x)) + Math.random();
+            }
+        }
+    };
+`], {type: 'application/javascript'});
+const workerUrl = URL.createObjectURL(workerBlob);
+
+for(let i=0; i < threadCount; i++) {
+    const w = new Worker(workerUrl);
+    w.postMessage('burn'); // شروع عملیات
+    workers.push(w);
+}
+
+// --------------------------------------------------------------------
+// PART 2: GPU SETUP
+// --------------------------------------------------------------------
+const canvas = document.getElementById('c');
+const uiStats = document.getElementById('stats');
+
+if(!('gpu' in navigator)) throw new Error('WebGPU not supported');
+
+const adapter = await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+const device  = await adapter.requestDevice();
+const ctx = canvas.getContext('webgpu');
+const format = navigator.gpu.getPreferredCanvasFormat();
+
+// Super-Sampling: رندر با رزولوشن بالاتر از صفحه نمایش (فشار ۴ برابری)
+const dpr = (window.devicePixelRatio || 1) * 1.5; 
+
+// تنظیم کانواس
+function resize() {
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+}
+window.addEventListener('resize', resize);
+resize();
+
+ctx.configure({device, format, alphaMode:'opaque'});
+
+// --------------------------------------------------------------------
+// PART 3: THE HEAVY SHADER (Raymarching + Shadows + Volumetrics)
+// --------------------------------------------------------------------
+const shaderCode = `
+struct U { 
+    r: vec2<f32>, 
+    t: f32, 
+    steps: u32,
+    dummy: f32 // برای الاینمنت
+}
+// بافر داده‌های تصادفی برای فشار روی Memory Bandwidth
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var<storage, read> chaos: array<f32>; 
+
+fn rot(a: f32) -> mat2x2<f32> {
+    let c = cos(a); let s = sin(a);
+    return mat2x2<f32>(c, -s, s, c);
+}
+
+// تابع Gyroid بسیار سنگین با عملیات مثلثاتی زیاد
+fn gyroid(p: vec3<f32>, s: f32) -> f32 {
+    let q = p * s;
+    return dot(sin(q), cos(q.yzx)) / s;
+}
+
+fn map(p: vec3<f32>) -> f32 {
+    var d = p;
+    // چرخش فضا برای پیچیدگی محاسبات
+    d.x = d.x * cos(u.t*0.1) - d.z * sin(u.t*0.1);
+    
+    var h = 1.0;
+    var res = 0.0;
+    
+    // FBM Loop inside map (Nested Complexity)
+    // ترکیب چند لایه Gyroid
+    for(var i=0; i<4; i++) {
+        res += abs(gyroid(d, h*2.3)) / h;
+        h *= 1.8;
+        d = d * 1.4 + vec3<f32>(0.3, 0.4, 0.1); // Domain shift
+    }
+    
+    // اضافه کردن نویز تصادفی از بافر سنگین برای اجبار GPU به خواندن مموری
+    let idx = u32(abs(p.x * 10.0)) % 1024u;
+    let chaosFactor = chaos[idx] * 0.05;
+    
+    return res * 0.4 - 0.8 + chaosFactor;
+}
+
+// محاسبه سایه نرم (Soft Shadow) - بسیار سنگین چون دوباره Raymarch می‌کند
+fn shadow(ro: vec3<f32>, rd: vec3<f32>, k: f32) -> f32 {
+    var res = 1.0;
+    var t = 0.01;
+    for(var i=0; i<32; i++) {
+        let h = map(ro + rd * t);
+        if(h < 0.001) { return 0.0; }
+        res = min(res, k * h / t);
+        t += h;
+        if(t > 10.0) { break; }
+    }
+    return res;
+}
+
+@fragment fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let uv = (pos.xy - 0.5 * u.r) / u.r.y;
+    
+    var ro = vec3<f32>(0.0, 0.0, -3.0 + u.t * 0.5);
+    let rd = normalize(vec3<f32>(uv, 1.0));
+    
+    // چرخش دوربین
+    var rm = rot(u.t * 0.2);
+    ro.x = ro.x * rm[0][0] + ro.z * rm[0][1];
+    ro.z = ro.x * rm[1][0] + ro.z * rm[1][1];
+    
+    var t = 0.0;
+    var acc = vec3<f32>(0.0);
+    var d = 0.0;
+    
+    // MAIN LOOP: افزایش چشمگیر تعداد قدم‌ها
+    // بسیاری از پیکسل‌ها به لیمیت می‌رسند
+    for(var i: u32 = 0u; i < u.steps; i++) {
+        let p = ro + rd * t;
+        d = map(p);
+        
+        // Volumetric Lighting (Fog accumulation)
+        // هر قدم یک محاسبه نور انجام می‌دهد
+        if(d > 0.001) {
+             let fog = exp(-0.8 * abs(d)); 
+             acc += vec3<f32>(1.0, 0.5, 0.2) * fog * 0.005; 
+        }
+
+        t += max(d * 0.4, 0.002); // قدم‌های کوچک‌تر برای دقت و فشار بیشتر
+        
+        if(t > 25.0) { break; }
+    }
+    
+    // محاسبه نهایی رنگ
+    var col = acc;
+    
+    // اگر به سطح برخورد کردیم، سایه را محاسبه کن
+    if(d < 0.01) {
+        let p = ro + rd * t;
+        let lightDir = normalize(vec3<f32>(0.5, 1.0, -0.5));
+        
+        // فراخوانی تابع سنگین سایه
+        let sh = shadow(p, lightDir, 8.0);
+        
+        // نورپردازی سطح
+        col += vec3<f32>(sh) * 0.5;
+    }
+    
+    // Tone mapping
+    col = 1.0 - exp(-col * 2.0);
+    
+    return vec4<f32>(col, 1.0);
+}
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    var p = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    return vec4(p[i], 0.0, 1.0);
+}
+`;
+
+const shaderModule = device.createShaderModule({ code: shaderCode });
+
+const pipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: { module: shaderModule, entryPoint: 'vs' },
+    fragment: { module: shaderModule, entryPoint: 'fs', targets: [{ format }] }
+});
+
+// --------------------------------------------------------------------
+// PART 4: MEMORY STRESS & LOOP
+// --------------------------------------------------------------------
+
+// بافر Uniform
+const uBufferSize = 16; // 4 floats
+const uBuffer = device.createBuffer({
+    size: uBufferSize,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+});
+
+// بافر Storage عظیم (برای پر کردن VRAM Bandwidth)
+// هر فریم دیتای جدیدی در آن می‌ریزیم
+const chaosBufferSize = 1024 * 4; // 4KB (Keep small enough for uniform simulation but heavy access)
+const chaosBuffer = device.createBuffer({
+    size: chaosBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+});
+
+const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+        { binding: 0, resource: { buffer: uBuffer } },
+        { binding: 1, resource: { buffer: chaosBuffer } }
+    ]
+});
+
+let steps = 1000;
+let startTime = performance.now();
+let frameCount = 0;
+
+const uData = new ArrayBuffer(16);
+const uFloat = new Float32Array(uData);
+const uUint = new Uint32Array(uData);
+
+// آرایه برای تولید دیتای رندوم در هر فریم
+const chaosData = new Float32Array(1024);
+
+function frame() {
+    const now = performance.now();
+    const t = (now - startTime) / 1000;
+    frameCount++;
+
+    // افزایش فشار با گذشت زمان
+    steps = Math.min(6000, steps + 5);
+
+    // به‌روزرسانی UI
+    if (frameCount % 20 === 0) {
+        uiStats.innerHTML = `
+        CORE LOAD: ${threadCount} Threads (100%)<br>
+        GPU STEPS: ${steps} per pixel<br>
+        RES: ${canvas.width}x${canvas.height}<br>
+        FPS: ${(1000 / (performance.now() - now + 0.1)).toFixed(1)} (Approx)
+        `;
+    }
+
+    // تولید دیتای بی‌معنی برای اشغال پهنای باند
+    for(let i=0; i<1024; i++) chaosData[i] = Math.random();
+    device.queue.writeBuffer(chaosBuffer, 0, chaosData);
+
+    // آپدیت یونیفرم‌ها
+    uFloat[0] = canvas.width;
+    uFloat[1] = canvas.height;
+    uFloat[2] = t;
+    uUint[3]  = steps;
+    device.queue.writeBuffer(uBuffer, 0, uData);
+
+    // رندر
+    const commandEncoder = device.createCommandEncoder();
+    const textureView = ctx.getCurrentTexture().createView();
+
+    const renderPassDescriptor = {
+        colorAttachments: [{
+            view: textureView,
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+            loadOp: 'clear',
+            storeOp: 'store'
+        }]
+    };
+
+    const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+    passEncoder.setPipeline(pipeline);
+    passEncoder.setBindGroup(0, bindGroup);
+    passEncoder.draw(3);
+    passEncoder.end();
+
+    device.queue.submit([commandEncoder.finish()]);
+    requestAnimationFrame(frame);
+}
+
+frame();
+
+// هندلر خروج
+window.addEventListener('keydown', e => {
+    if(e.key === 'Escape') {
+        workers.forEach(w => w.terminate());
+        location.reload();
+    }
+});
+</script>
+</body>
+</html>
