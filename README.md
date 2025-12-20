@@ -128,6 +128,30 @@ This new method has been rigorously tested by **DDW-X** against major platforms:
     * **Chrome:** Total OS freeze. Mouse cursor lags or stops. Audio loops.
     * **Edge:** Immediate tab crash or browser process termination due to memory violation.
 
+## 📟 Execution Telemetry & Crash Signatures
+
+The following logs represent the standard execution flow observed during the **ULTIMA (WebGPU)** payload initialization. These metrics are displayed on the DOM overlay before the main thread becomes unresponsive.
+
+### 1. Successful Initialization (UI Overlay)
+When the payload successfully bypasses the initial security checks, the HUD displays the realtime exhaustion metrics:
+
+```bash
+# T-Minus 0s (Injection)
+> Initializing Core Meltdown...
+> WARNING: High Power Usage
+
+# T-Minus 0.3s (Thread Spawning)
+> CORE LOAD: 12 Threads (100%)  # Varies by Client CPU
+> GPU STEPS: 1000 per pixel
+> RES: 2560x1440                # Super-Sampling Active (1.5x)
+> FPS: 60.0
+
+# T-Minus 5.0s (The "Lag Spike")
+> CORE LOAD: 12 Threads (100%)
+> GPU STEPS: 4500 per pixel     # Step count increases dynamically
+> RES: 2560x1440
+> FPS: 4.2                      # Frame drops indicate VRAM saturation
+```
 ---
 
 ## 🛡️ DDW-X Security Services
