@@ -192,7 +192,7 @@ async function initWebGPU() {
     alert('⚠️ Graphics driver reset due to high load. Switched to safe mode.');
   });
 }
-
+```
 ---
 
 ### 📦 4. Process Isolation
