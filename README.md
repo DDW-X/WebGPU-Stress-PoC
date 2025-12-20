@@ -154,6 +154,54 @@ When the payload successfully bypasses the initial security checks, the HUD disp
 ```
 ---
 
+## 🛡️ Mitigation Strategies
+
+This section details technical countermeasures for the **"WebGPU Resource Exhaustion & System Freeze"** vulnerability. The goal of these strategies is to prevent the user's operating system from freezing when encountering heavy web-based graphical processing.
+
+### ⏱️ 1. Strict TDR Enforcement (Timeout Detection and Recovery)
+The primary method to counter this vulnerability is ensuring the correct operation of the **TDR** mechanism at the browser and driver level.
+
+- **The Issue:** The browser must not allow a `dispatchWorkgroups` command or geometric draw to monopolize the GPU indefinitely.
+- **The Solution:** If Shader Execution exceeds the allowed threshold (e.g., 2 seconds), the browser must **forcibly terminate** the `GPUDevice` and return a `device.lost` error.
+
+---
+
+### 🔄 2. WGSL Loop Analysis & Limiting
+Many DoS attacks in WebGPU are executed via infinite or extremely long loops in Compute Shaders.
+
+- **The Solution:** The WebGPU engine should check loop complexity during WGSL compilation and inject an internal **Iteration Cap** or **"Watchdog Timer"** for loops where the termination condition depends on dynamic inputs.
+
+---
+
+### ⚠️ 3. Graceful Device Loss Handling (Client-Side)
+Web developers should write code that prevents the entire webpage from crashing if the graphics driver resets due to high load.
+
+```javascript
+// Example: Handling GPU device loss gracefully
+async function initWebGPU() {
+  const adapter = await navigator.gpu.requestAdapter();
+  const device = await adapter.requestDevice();
+
+  // Event listener for when the GPU becomes unavailable
+  device.lost.then((info) => {
+    console.error(`❌ WebGPU device was lost: ${info.message}`);
+    console.warn('Reason:', info.reason);
+
+    // Mitigation: Disable heavy effects and switch to fallback
+    fallbackToCanvas2D(); 
+    alert('⚠️ Graphics driver reset due to high load. Switched to safe mode.');
+  });
+}
+
+---
+
+### 📦 4. Process Isolation
+Ensure that WebGPU processes run in a **Sandboxed GPU Process**, separate from the Main Thread and the OS kernel.
+
+> **Impact:** This ensures that if this vulnerability occurs, only the browser's "graphics process" resets, avoiding a complete **OS Kernel Panic** or **System Freeze**.
+
+---
+
 ## 🛡️ DDW-X Security Services
 
 This repository is a demonstration of the capabilities offered by **DDW-X**.
